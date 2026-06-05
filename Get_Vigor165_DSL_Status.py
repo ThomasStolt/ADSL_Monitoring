@@ -24,7 +24,6 @@ HUE_GROUP         = os.environ.get("HUE_GROUP", "17")
 HUE_API_KEY_FILE  = os.environ.get("HUE_API_KEY_FILE", "/etc/adsl_monitoring/Philips_Hue_API_Key.txt")
 HUE_RETRY_DELAY   = float(os.environ.get("HUE_RETRY_DELAY", "5"))
 HUE_TIMEOUT       = float(os.environ.get("HUE_TIMEOUT", "10"))
-HEADERS           = {"Accept": "application/json"}
 
 SNMP_GET_CMD      = "snmpget"
 SNMP_VERSION      = os.environ.get("SNMP_VERSION", "1")
@@ -142,6 +141,15 @@ class HueClient:
     def off(self):
         self._put('{"on": false, "transitiontime": 0}')
 
+    # Best-effort single attempt (hard timeout, no retry) for clean shutdown,
+    # so systemctl stop never hangs even if the bridge is unreachable.
+    def try_off(self, timeout):
+        try:
+            requests.put(self._base + "/action/", headers=self._headers,
+                         data='{"on": false, "transitiontime": 0}', timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            logging.warning("Could not turn lights off during shutdown: %s", e)
+
     def set_color(self, name):
         x, y = self.COLORS[name]
         self._put(f'{{"xy": [{x}, {y}], "transitiontime": 0}}')
@@ -164,10 +172,7 @@ def blink(hue):
 # no retry so shutdown never hangs even if the bridge is unreachable.
 def shutdown(signum, frame):
     logging.info("Received signal %s, shutting down - turning lights off.", signal.Signals(signum).name)
-    try:
-        hue.off()
-    except Exception as e:
-        logging.warning("Could not turn lights off during shutdown: %s", e)
+    hue.try_off(3)
     sys.exit(0)
 
 #==============================================================================#
