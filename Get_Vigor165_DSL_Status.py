@@ -101,51 +101,63 @@ def read_status(delay=0):
     proc = subprocess.run(snmpget_cmd, capture_output=True)
     return parse_snmp_status(proc.stdout.decode(), proc.stderr.decode())
 
-# Wrapper around requests that retries forever on any transport error
-# (connection refused, DNS failure, timeout). A transient bridge or name
-# resolution hiccup should retry instead of crashing the process, mirroring
-# the original snmpget retry behaviour.
-def hue_request(method, url, **kwargs):
-    error_logged = False
-    while True:
-        try:
-            return requests.request(method, url, timeout=HUE_TIMEOUT, **kwargs)
-        except requests.exceptions.RequestException as e:
-            if not error_logged:
-                logging.warning("Hue request error, retrying every %ss: %s", HUE_RETRY_DELAY, e)
-                error_logged = True
-            time.sleep(HUE_RETRY_DELAY)
+class HueClient:
+    # xy chromaticity coordinates for each status colour (shared by v1 and v2).
+    COLORS = {
+        "red":    (0.6750, 0.3220),
+        "yellow": (0.4684, 0.4759),
+        "green":  (0.2151, 0.7106),
+    }
 
-# This will switch the lights on and set the brightness to bri
-# The colour of the lights will be whatever the last colour of that light was
-def lights_on(bri):
-    hue_request("PUT", f"http://{HUE_BRIDGE_HOST}/api/{API_KEY}/groups/{HUE_GROUP}/action/", headers=HEADERS, data=f'{{"on": true, "bri": {bri}, "transitiontime": 0}}')
+    def __init__(self, host, app_key, group_v1, retry_delay, timeout):
+        self._base = f"http://{host}/api/{app_key}/groups/{group_v1}"
+        self._headers = {"Accept": "application/json"}
+        self._retry_delay = retry_delay
+        self._timeout = timeout
 
-# This will switch the lights off
-def lights_off():
-    hue_request("PUT", f"http://{HUE_BRIDGE_HOST}/api/{API_KEY}/groups/{HUE_GROUP}/action/", headers=HEADERS, data=f'{{"on": false, "transitiontime": 0}}')
+    # Retry forever on any transport error (DNS / connection / timeout), so a
+    # transient bridge or name-resolution hiccup retries instead of crashing.
+    def _request(self, method, url, **kwargs):
+        error_logged = False
+        while True:
+            try:
+                return requests.request(method, url, timeout=self._timeout, **kwargs)
+            except requests.exceptions.RequestException as e:
+                if not error_logged:
+                    logging.warning("Hue request error, retrying every %ss: %s",
+                                    self._retry_delay, e)
+                    error_logged = True
+                time.sleep(self._retry_delay)
 
-# This will only set the colour (red, yellow or green) fast, brightness will be unchanged
-# That also means that if it is off, it will stay off
-def set_colour(colour):
-    if   colour == "red":    colour = '{ "xy": [0.6750, 0.3220], "transitiontime":0 } '
-    elif colour == "yellow": colour = '{ "xy": [0.4684, 0.4759], "transitiontime":0 } '
-    elif colour == "green":  colour = '{ "xy": [0.2151, 0.7106], "transitiontime":0 } '
-    hue_request("PUT", f"http://{HUE_BRIDGE_HOST}/api/{API_KEY}/groups/{HUE_GROUP}/action/", headers=HEADERS, data=colour)
+    @staticmethod
+    def _to_bri(pct):
+        return max(0, min(254, round(pct / 100 * 254)))
 
-# This will set the brightness to the value provided
-# The colour will stay unchanged
-def new_bri(value):
-    hue_request("PUT", f"http://{HUE_BRIDGE_HOST}/api/{API_KEY}/groups/{HUE_GROUP}/action/", headers=HEADERS, data=f'{{"bri": {value}, "transitiontime": 0}}')
+    def _put(self, data):
+        self._request("PUT", self._base + "/action/", headers=self._headers, data=data)
 
-# If lights are off turn them on, if they are on turn them off
-def toggle_lights():
-    # Find out whether any of the ADSL lights are on
-    group = hue_request("GET", f"http://{HUE_BRIDGE_HOST}/api/{API_KEY}/groups/{HUE_GROUP}")
-    if json.loads(group.text)['state']['any_on']:
-        hue_request("PUT", f"http://{HUE_BRIDGE_HOST}/api/{API_KEY}/groups/{HUE_GROUP}/action/", headers=HEADERS, data='{"on":false, "bri": 0, "transitiontime": 0}')
+    def on(self, pct):
+        self._put(f'{{"on": true, "bri": {self._to_bri(pct)}, "transitiontime": 0}}')
+
+    def off(self):
+        self._put('{"on": false, "transitiontime": 0}')
+
+    def set_color(self, name):
+        x, y = self.COLORS[name]
+        self._put(f'{{"xy": [{x}, {y}], "transitiontime": 0}}')
+
+    def set_brightness(self, pct):
+        self._put(f'{{"bri": {self._to_bri(pct)}, "transitiontime": 0}}')
+
+    def is_on(self):
+        resp = self._request("GET", self._base, headers=self._headers)
+        return json.loads(resp.text)["state"]["any_on"]
+
+def blink(hue):
+    if hue.is_on():
+        hue.off()
     else:
-        hue_request("PUT", f"http://{HUE_BRIDGE_HOST}/api/{API_KEY}/groups/{HUE_GROUP}/action/", headers=HEADERS, data='{"on":true, "bri": 254, "transitiontime": 0}')
+        hue.on(100)
 
 # On SIGTERM (systemctl stop) / SIGINT (Ctrl-C), turn the lights off best-effort
 # and exit cleanly instead of being killed mid-loop. Uses a short timeout and
@@ -153,13 +165,8 @@ def toggle_lights():
 def shutdown(signum, frame):
     logging.info("Received signal %s, shutting down - turning lights off.", signal.Signals(signum).name)
     try:
-        requests.put(
-            f"http://{HUE_BRIDGE_HOST}/api/{API_KEY}/groups/{HUE_GROUP}/action/",
-            headers=HEADERS,
-            data='{"on": false, "transitiontime": 0}',
-            timeout=3,
-        )
-    except requests.exceptions.RequestException as e:
+        hue.off()
+    except Exception as e:
         logging.warning("Could not turn lights off during shutdown: %s", e)
     sys.exit(0)
 
@@ -183,6 +190,8 @@ if not which(SNMP_GET_CMD):
     logging.error("snmpget command not found!")
     sys.exit(1)
 
+hue = HueClient(HUE_BRIDGE_HOST, API_KEY, HUE_GROUP, HUE_RETRY_DELAY, HUE_TIMEOUT)
+
 # Clean up the lights on stop/restart
 signal.signal(signal.SIGTERM, shutdown)
 signal.signal(signal.SIGINT, shutdown)
@@ -201,17 +210,17 @@ while True:
     # UP / SHOWTIME: green, slowly dimming to off (calm = healthy)
     showtime_start = 0
     green_count = 254
-    lights_on(1)
+    hue.on(round(1 / 254 * 100, 2))
     while state == STATE_UP:
         if showtime_start == 0:
             logging.info("Entering showtime status")
-            set_colour("green")
+            hue.set_color("green")
             showtime_start = 1
         if green_count > 0:
-            new_bri(green_count)
+            hue.set_brightness(green_count / 254 * 100)
             green_count -= 1
             if green_count == 1:
-                lights_off()
+                hue.off()
         time.sleep(DIM_INTERVAL)
         state = read_status(0)
 
@@ -220,10 +229,10 @@ while True:
     while state == STATE_TRAINING:
         if training_start == 0:
             logging.info("Entering training status")
-            set_colour("yellow")
+            hue.set_color("yellow")
             training_start = 1
-            new_bri(254)
-        toggle_lights()
+            hue.set_brightness(100)
+        blink(hue)
         state = read_status(2)
 
     # DOWN / READY: blinking red
@@ -232,10 +241,10 @@ while True:
         if ready_start == 0:
             logging.info("Entering ready status")
             ready_start = 1
-            set_colour("red")
-            new_bri(254)
+            hue.set_color("red")
+            hue.set_brightness(100)
             time.sleep(1)
-        toggle_lights()
+        blink(hue)
         state = read_status(0.5)
 
     # ERROR: solid red, retry until the modem answers
@@ -243,7 +252,7 @@ while True:
     while state == STATE_ERROR:
         if error_start == 0:
             logging.info("Entering error status")
-            set_colour("red")
-            lights_on(254)
+            hue.set_color("red")
+            hue.on(100)
             error_start = 1
         state = read_status(2)
