@@ -104,7 +104,7 @@ def read_status(delay=0):
 # Wrapper around requests that retries forever on any transport error
 # (connection refused, DNS failure, timeout). A transient bridge or name
 # resolution hiccup should retry instead of crashing the process, mirroring
-# the snmpget retry behaviour in get_adsl_status().
+# the original snmpget retry behaviour.
 def hue_request(method, url, **kwargs):
     error_logged = False
     while True:
