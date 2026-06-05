@@ -10,7 +10,7 @@ Runs as a systemd service on a Raspberry Pi.
 ## How it works
 
 ```
-Vigor 165 modem  --SNMP (snmpget)-->  this script  --HTTP (Hue API v1)-->  Hue bridge --> light group
+Vigor 165 modem  --SNMP (snmpget)-->  this script  --HTTPS (Hue API v2/CLIP)-->  Hue bridge --> light group
 ```
 
 Every second or so the script reads the modem's `adslAturCurrStatus` OID and
@@ -75,14 +75,16 @@ value (or the whole file) is missing.
 | `HUE_GROUP` | `17` | Hue group ID to control |
 | `HUE_API_KEY_FILE` | `/etc/adsl_monitoring/Philips_Hue_API_Key.txt` | Path to the API key file |
 | `HUE_RETRY_DELAY` | `5` | Seconds between Hue retries after an error |
-| `HUE_TIMEOUT` | `10` | Per-request Hue HTTP timeout (s) |
+| `HUE_TIMEOUT` | `10` | Per-request Hue HTTPS timeout (s) |
 | `SNMP_TARGET_HOST` | `192.168.2.2` | Modem IP |
 | `SNMP_COMMUNITY` | `public` | SNMP v1 community |
 | `SNMP_VERSION` | `1` | SNMP version |
 | `SNMP_OID` | `.1.3.6.1.2.1.10.94.1.1.3.1.6.4` | `adslAturCurrStatus` |
+| `HUE_SHOWTIME_DIM_INTERVAL` | `5` | Seconds between green dim-down steps (UP/SHOWTIME state) |
 
-**The Hue API key** is the bridge "username" from the Hue v1 API. Generate one by
-pressing the bridge's link button and POSTing to `http://<bridge>/api`, then save
+**The Hue API key** is the 40-character application key used by the Hue v2 (CLIP) API
+(the same key works as it did under v1 — no need to regenerate). To create a fresh key,
+press the bridge's link button and POST to `https://<bridge>/api`, then save
 the returned string into the key file:
 
 ```bash
@@ -105,9 +107,41 @@ The service auto-restarts on failure and is ordered after the network and
 `avahi-daemon` (mDNS) so the bridge name resolves before the first request. On
 `systemctl stop` it turns the lights off and exits cleanly.
 
+## Testing (simulation harness)
+
+Set the environment variable `ADSL_SIM_FILE` to any file path and the script
+will read the line state from that file each poll instead of calling `snmpget`.
+Write one of the four keywords into the file to drive the state:
+
+| Keyword | State |
+| --- | --- |
+| `up` | SHOWTIME — green, dimming |
+| `training` | TRAINING — blinking yellow |
+| `down` | READY — blinking red |
+| `error` | Modem unreachable — solid red |
+
+An empty file (or unknown content) holds the current state unchanged.
+
+`ADSL_SIM_FILE` is not in the service config — it is for manual runs only.
+**Stop the service first** so two clients do not fight over the light group:
+
+```bash
+sudo systemctl stop adsl_monitoring
+export ADSL_SIM_FILE=/tmp/adsl_sim
+export HUE_SHOWTIME_DIM_INTERVAL=0.1
+export HUE_API_KEY_FILE=/path/to/Philips_Hue_API_Key.txt
+echo up > /tmp/adsl_sim
+python3 Get_Vigor165_DSL_Status.py &
+echo training > /tmp/adsl_sim
+echo down     > /tmp/adsl_sim
+echo error    > /tmp/adsl_sim
+```
+
+Setting `HUE_SHOWTIME_DIM_INTERVAL=0.1` speeds up the green fade so you can
+watch the full dim-down sequence in seconds rather than minutes.
+
 ## Notes
 
-- Uses the **Philips Hue v1 (local) API**, which is deprecated in favour of the
-  HTTPS CLIP v2 API but still functional on current bridges.
+- Uses the **Philips Hue v2 (CLIP) API** over HTTPS with `verify=False` (trusted home LAN).
 - The status hex strings (`READY`/`TRAINING`/`SHOWTIME`) are protocol constants
   and live in the script, not the config.
