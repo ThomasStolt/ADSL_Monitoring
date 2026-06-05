@@ -1,0 +1,6 @@
+# Secret: Philips Hue API key, must never be committed
+Philips_Hue_API_Key.txt
+
+__pycache__/
+*.pyc
+.DS_Store

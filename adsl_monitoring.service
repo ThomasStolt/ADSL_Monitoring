@@ -1,0 +1,17 @@
+[Unit]
+Description=Monitor ADSL Router Status vor Draytek Vigor 165
+# Wait for the network AND mDNS (avahi) so the PhilipsHueBridge .local name
+# resolves before the script makes its first Hue request.
+After=network-online.target avahi-daemon.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/bin/Get_Vigor165_DSL_Status.py
+User=adsl_monitor
+WorkingDirectory=/etc/adsl_monitoring
+# A transient bridge/DNS hiccup should not leave the service dead forever.
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
