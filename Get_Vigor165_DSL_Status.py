@@ -1,7 +1,6 @@
 # ======= #
 # IMPORTS #
 # ======= #
-import json
 import logging
 import os
 import signal
@@ -124,9 +123,15 @@ class HueClient:
             try:
                 resp = requests.request(method, url, headers=self._headers,
                                         verify=False, timeout=self._timeout, **kwargs)
-                errors = resp.json().get("errors") if resp.content else None
-                if errors:
-                    logging.warning("Hue v2 API errors: %s", errors)
+                # Log any v2 API errors, but never let a non-JSON body on an
+                # otherwise-successful response crash the retry loop.
+                if resp.content:
+                    try:
+                        errors = resp.json().get("errors")
+                        if errors:
+                            logging.warning("Hue v2 API errors: %s", errors)
+                    except ValueError:
+                        pass
                 return resp
             except requests.exceptions.RequestException as e:
                 if not error_logged:
@@ -136,7 +141,8 @@ class HueClient:
                 time.sleep(self._retry_delay)
 
     # Resolve the v1 integer group (e.g. 17) to its v2 grouped_light UUID by
-    # matching id_v1 == "/groups/<n>". Looked up once at startup.
+    # matching id_v1 == "/groups/<n>". Looked up once at startup; blocks
+    # (via _request's retry loop) until the bridge answers.
     def _resolve_group(self, group_v1):
         id_v1 = f"/groups/{group_v1}"
         for rtype in ("room", "zone"):
