@@ -1,0 +1,4 @@
+# Python dependencies for adsl_monitoring.
+# On the Raspberry Pi this is provided by the apt package `python3-requests`
+# (see README). pip-installing is only needed for local development / venvs.
+requests>=2.25

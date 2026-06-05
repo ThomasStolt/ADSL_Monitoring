@@ -15,14 +15,16 @@ This repo mirrors files that live in three different places on the Pi. There is 
 | Repo file | Pi path | Notes |
 |---|---|---|
 | `Get_Vigor165_DSL_Status.py` | `/usr/local/bin/` | The daemon. |
-| `adsl_monitoring.service` | `/etc/systemd/system/` | The unit. `WorkingDirectory=/etc/adsl_monitoring`, `User=adsl_monitor`. |
-| `Philips_Hue_API_Key.txt` | `/etc/adsl_monitoring/` | **Secret**, git-ignored. The script's CWD is this dir; it reads the key by *relative* filename, so CWD matters. |
+| `adsl_monitoring.service` | `/etc/systemd/system/` | The unit. `WorkingDirectory=/etc/adsl_monitoring`, `User=adsl_monitor`, `EnvironmentFile=` the conf below. |
+| `adsl_monitoring.conf` | `/etc/adsl_monitoring/` | Site config (`KEY=VALUE`), loaded by systemd as env vars. Not secret. |
+| `Philips_Hue_API_Key.txt` | `/etc/adsl_monitoring/` | **Secret**, git-ignored. Path is set by `HUE_API_KEY_FILE` (absolute by default). |
 
 ## How it works
 
 The script (`Get_Vigor165_DSL_Status.py`) is a single infinite loop, no classes/modules:
 
-1. **Reads the Hue API key** from `Philips_Hue_API_Key.txt` *relative to the current directory* — this only works because systemd sets `WorkingDirectory=/etc/adsl_monitoring`. Running it from anywhere else fails unless that file is in CWD.
+0. **Loads config** from environment variables (`HUE_BRIDGE_HOST`, `HUE_GROUP`, `SNMP_TARGET_HOST`, etc.), each with a built-in default matching the original hard-coded value — so it still runs with no env set. systemd supplies these via `EnvironmentFile=`; logging uses the `logging` module to stdout (journald captures it). `SIGTERM`/`SIGINT` are trapped (`shutdown()`) to turn the lights off best-effort and exit 0, so `systemctl stop` is clean rather than a kill mid-loop.
+1. **Reads the Hue API key** from `HUE_API_KEY_FILE` (absolute path by default), `.strip()`-ed. No longer CWD-dependent.
 2. **Polls the modem** by shelling out to `snmpget` (SNMP v1, community `public`) against `192.168.2.2`, OID `.1.3.6.1.2.1.10.94.1.1.3.1.6.4` (`adslAturCurrStatus`). The status is matched against hard-coded hex strings: `SHOWTIME` (line up), `TRAINING` (syncing), `READY` (down/retraining).
 3. **Drives Hue group 17** via the bridge's local REST API (`http://{HUE_BRIDGE_IP}/api/{KEY}/groups/17/...`):
    - `SHOWTIME` → green, then slowly dims to off over ~254 polls (calm = healthy).
@@ -36,8 +38,7 @@ State transitions are detected by `*_start` sentinel flags so the timestamped lo
 
 - **Two hosts are referenced and they differ:** the modem is an IP (`192.168.2.2`, SNMP); the Hue bridge is a *hostname* (`HUE_BRIDGE_IP = "PhilipsHueBridge"`, HTTP). The bridge name resolves via **mDNS** (`PhilipsHueBridge.local`, served by `avahi-daemon`) — it is not in `/etc/hosts`.
 - **Resilience (added after a boot-time crash):** both layers now tolerate transient failures. SNMP errors retry in `get_adsl_status()`; all Hue HTTP calls go through `hue_request()`, which retries forever on any `requests` transport error (DNS/connection/timeout) instead of crashing. The unit also has `Restart=on-failure`/`RestartSec=10` and waits on `network-online.target avahi-daemon.service` so the bridge name resolves before the first request. The original crash (`[Errno -3] Temporary failure in name resolution` at boot, then dead for days) is addressed by these together.
-- All tuning is **hard-coded constants** at the top of the script (bridge host, group number `17`, SNMP target/OID/community, the three status hex strings). There is no config file or argument parsing.
-- The Hue API key file content is read raw including any trailing newline; the script does not strip it.
+- Tuning lives in `adsl_monitoring.conf` (env vars), **except** the three status hex strings (`READY`/`TRAINING`/`SHOWTIME`), which are protocol constants and stay in the script. No argument parsing.
 
 ## Running / operating (on the Pi)
 
@@ -49,11 +50,12 @@ journalctl -u adsl_monitoring -f          # live logs (the script prints timesta
 # Reproduce a poll by hand (verify modem reachable / OID)
 snmpget -v 1 -r 0 -c public 192.168.2.2 .1.3.6.1.2.1.10.94.1.1.3.1.6.4
 
-# Run the script manually — MUST be in the working dir so it finds the key file
-cd /etc/adsl_monitoring && sudo -u adsl_monitor python3 /usr/local/bin/Get_Vigor165_DSL_Status.py
+# Run the script manually (uses built-in defaults unless you export the conf vars)
+set -a; . /etc/adsl_monitoring/adsl_monitoring.conf; set +a
+sudo -u adsl_monitor --preserve-env python3 /usr/local/bin/Get_Vigor165_DSL_Status.py
 ```
 
-There are no tests, linters, or dependency manifest. Runtime deps: Python 3 with `requests`, and the `snmp`/`snmpget` CLI binary on PATH.
+No tests or linters. Runtime deps: Python 3 with `requests` (`requirements.txt`; on the Pi via the `python3-requests` apt package) and the `snmpget` CLI from the `snmp` apt package on PATH. See `README.md` for full install/config.
 
 ## Secrets
 

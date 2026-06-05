@@ -9,6 +9,9 @@ Wants=network-online.target
 ExecStart=/usr/bin/python3 /usr/local/bin/Get_Vigor165_DSL_Status.py
 User=adsl_monitor
 WorkingDirectory=/etc/adsl_monitoring
+# Site-specific settings (bridge host, group, SNMP target, ...). The script
+# falls back to built-in defaults if this file is missing.
+EnvironmentFile=/etc/adsl_monitoring/adsl_monitoring.conf
 # A transient bridge/DNS hiccup should not leave the service dead forever.
 Restart=on-failure
 RestartSec=10
