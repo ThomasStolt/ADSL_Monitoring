@@ -11,6 +11,8 @@ import time
 from shutil import which
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 #===============#
 # CONFIGURATION #
@@ -101,7 +103,7 @@ def read_status(delay=0):
     return parse_snmp_status(proc.stdout.decode(), proc.stderr.decode())
 
 class HueClient:
-    # xy chromaticity coordinates for each status colour (shared by v1 and v2).
+    # xy chromaticity coordinates for each status colour.
     COLORS = {
         "red":    (0.6750, 0.3220),
         "yellow": (0.4684, 0.4759),
@@ -109,18 +111,23 @@ class HueClient:
     }
 
     def __init__(self, host, app_key, group_v1, retry_delay, timeout):
-        self._base = f"http://{host}/api/{app_key}/groups/{group_v1}"
-        self._headers = {"Accept": "application/json"}
+        self._root = f"https://{host}/clip/v2/resource"
+        self._headers = {"hue-application-key": app_key}
         self._retry_delay = retry_delay
         self._timeout = timeout
+        self._group_id = self._resolve_group(group_v1)
+        self._group_url = f"{self._root}/grouped_light/{self._group_id}"
 
-    # Retry forever on any transport error (DNS / connection / timeout), so a
-    # transient bridge or name-resolution hiccup retries instead of crashing.
     def _request(self, method, url, **kwargs):
         error_logged = False
         while True:
             try:
-                return requests.request(method, url, timeout=self._timeout, **kwargs)
+                resp = requests.request(method, url, headers=self._headers,
+                                        verify=False, timeout=self._timeout, **kwargs)
+                errors = resp.json().get("errors") if resp.content else None
+                if errors:
+                    logging.warning("Hue v2 API errors: %s", errors)
+                return resp
             except requests.exceptions.RequestException as e:
                 if not error_logged:
                     logging.warning("Hue request error, retrying every %ss: %s",
@@ -128,38 +135,58 @@ class HueClient:
                     error_logged = True
                 time.sleep(self._retry_delay)
 
-    @staticmethod
-    def _to_bri(pct):
-        return max(0, min(254, round(pct / 100 * 254)))
+    # Resolve the v1 integer group (e.g. 17) to its v2 grouped_light UUID by
+    # matching id_v1 == "/groups/<n>". Looked up once at startup.
+    def _resolve_group(self, group_v1):
+        id_v1 = f"/groups/{group_v1}"
+        for rtype in ("room", "zone"):
+            for r in self._get(f"/{rtype}"):
+                if r.get("id_v1") == id_v1:
+                    for svc in r.get("services", []):
+                        if svc.get("rtype") == "grouped_light":
+                            logging.info("Resolved %s -> grouped_light %s", id_v1, svc["rid"])
+                            return svc["rid"]
+        for g in self._get("/grouped_light"):
+            if g.get("id_v1") == id_v1:
+                logging.info("Resolved %s -> grouped_light %s", id_v1, g["id"])
+                return g["id"]
+        logging.error("Could not resolve grouped_light for %s", id_v1)
+        sys.exit(1)
 
-    def _put(self, data):
-        self._request("PUT", self._base + "/action/", headers=self._headers, data=data)
+    def _get(self, path):
+        resp = self._request("GET", self._root + path)
+        return resp.json().get("data", [])
+
+    def _put(self, payload):
+        self._request("PUT", self._group_url, json=payload)
 
     def on(self, pct):
-        self._put(f'{{"on": true, "bri": {self._to_bri(pct)}, "transitiontime": 0}}')
+        self._put({"on": {"on": True}, "dimming": {"brightness": pct},
+                   "dynamics": {"duration": 0}})
 
     def off(self):
-        self._put('{"on": false, "transitiontime": 0}')
+        self._put({"on": {"on": False}, "dynamics": {"duration": 0}})
 
     # Best-effort single attempt (hard timeout, no retry) for clean shutdown,
     # so systemctl stop never hangs even if the bridge is unreachable.
     def try_off(self, timeout):
         try:
-            requests.put(self._base + "/action/", headers=self._headers,
-                         data='{"on": false, "transitiontime": 0}', timeout=timeout)
+            requests.put(self._group_url, headers=self._headers, verify=False,
+                         json={"on": {"on": False}, "dynamics": {"duration": 0}},
+                         timeout=timeout)
         except requests.exceptions.RequestException as e:
             logging.warning("Could not turn lights off during shutdown: %s", e)
 
     def set_color(self, name):
         x, y = self.COLORS[name]
-        self._put(f'{{"xy": [{x}, {y}], "transitiontime": 0}}')
+        self._put({"color": {"xy": {"x": x, "y": y}}, "dynamics": {"duration": 0}})
 
     def set_brightness(self, pct):
-        self._put(f'{{"bri": {self._to_bri(pct)}, "transitiontime": 0}}')
+        self._put({"dimming": {"brightness": pct}, "dynamics": {"duration": 0}})
 
     def is_on(self):
-        resp = self._request("GET", self._base, headers=self._headers)
-        return json.loads(resp.text)["state"]["any_on"]
+        data = self._get(f"/grouped_light/{self._group_id}")
+        return bool(data and data[0]["on"]["on"])
 
 def blink(hue):
     if hue.is_on():
@@ -172,7 +199,8 @@ def blink(hue):
 # no retry so shutdown never hangs even if the bridge is unreachable.
 def shutdown(signum, frame):
     logging.info("Received signal %s, shutting down - turning lights off.", signal.Signals(signum).name)
-    hue.try_off(3)
+    if hue is not None:
+        hue.try_off(3)
     sys.exit(0)
 
 #==============================================================================#
@@ -195,11 +223,14 @@ if not which(SNMP_GET_CMD):
     logging.error("snmpget command not found!")
     sys.exit(1)
 
-hue = HueClient(HUE_BRIDGE_HOST, API_KEY, HUE_GROUP, HUE_RETRY_DELAY, HUE_TIMEOUT)
+hue = None
 
-# Clean up the lights on stop/restart
+# Register shutdown handlers before constructing the client: the v2 client's
+# constructor performs network I/O (group resolution) that can block.
 signal.signal(signal.SIGTERM, shutdown)
 signal.signal(signal.SIGINT, shutdown)
+
+hue = HueClient(HUE_BRIDGE_HOST, API_KEY, HUE_GROUP, HUE_RETRY_DELAY, HUE_TIMEOUT)
 
 # Construct the snmpget command
 snmpget_cmd = [SNMP_GET_CMD, "-v", SNMP_VERSION, "-r", SNMP_RETRY_COUNT, "-c", SNMP_COMMUNITY, SNMP_TARGET_HOST, SNMP_OID]
