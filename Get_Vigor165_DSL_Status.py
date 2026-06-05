@@ -166,8 +166,14 @@ class HueClient:
     def _put(self, payload):
         self._request("PUT", self._group_url, json=payload)
 
+    # v2 rejects/clamps very low brightness; floor at 1% so the late dim-down
+    # steps don't log spurious API errors. Going fully dark uses off(), not 0%.
+    @staticmethod
+    def _clamp_brightness(pct):
+        return max(1.0, min(100.0, pct))
+
     def on(self, pct):
-        self._put({"on": {"on": True}, "dimming": {"brightness": pct},
+        self._put({"on": {"on": True}, "dimming": {"brightness": self._clamp_brightness(pct)},
                    "dynamics": {"duration": 0}})
 
     def off(self):
@@ -188,11 +194,13 @@ class HueClient:
         self._put({"color": {"xy": {"x": x, "y": y}}, "dynamics": {"duration": 0}})
 
     def set_brightness(self, pct):
-        self._put({"dimming": {"brightness": pct}, "dynamics": {"duration": 0}})
+        self._put({"dimming": {"brightness": self._clamp_brightness(pct)}, "dynamics": {"duration": 0}})
 
     def is_on(self):
         data = self._get(f"/grouped_light/{self._group_id}")
-        return bool(data and data[0]["on"]["on"])
+        if not data:
+            return False
+        return bool(data[0].get("on", {}).get("on"))
 
 def blink(hue):
     if hue.is_on():
