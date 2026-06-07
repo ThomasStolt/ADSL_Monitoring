@@ -33,6 +33,10 @@ SNMP_COMMUNITY    = os.environ.get("SNMP_COMMUNITY", "public")
 SNMP_TARGET_HOST  = os.environ.get("SNMP_TARGET_HOST", "192.168.2.2")
 SNMP_OID          = os.environ.get("SNMP_OID", ".1.3.6.1.2.1.10.94.1.1.3.1.6.4")
 
+# --- Stair light (secondary, optional output) ---
+STAIR_HOST        = os.environ.get("STAIR_HOST", "")
+STAIR_TIMEOUT     = float(os.environ.get("STAIR_TIMEOUT", "3"))
+
 # Raw adslAturCurrStatus values as returned by snmpget (Hex-STRING form).
 HEX_SHOWTIME = "53 48 4F 57 54 49 4D 45"
 HEX_TRAINING = "54 52 41 49 4E 49 4E 47"
@@ -202,6 +206,26 @@ class HueClient:
             return False
         return bool(data[0].get("on", {}).get("on"))
 
+class StairClient:
+    # Secondary, best-effort output: drives the stair-light strip via its HTTP
+    # /api/ext control API. Never retries and never raises — a stair-controller
+    # problem must not affect the primary Hue output or the monitor loop. An
+    # empty host disables it entirely.
+    def __init__(self, host, timeout):
+        self._url = f"http://{host}/api/ext" if host else None
+        self._timeout = timeout
+
+    def signal(self, command):
+        if self._url is None:
+            return
+        # ValueError covers a malformed host/URL (requests 2.25.1 raises plain
+        # ValueError from prepare_url, which is not a RequestException).
+        try:
+            resp = requests.post(self._url, data={"state": command}, timeout=self._timeout)
+            resp.raise_for_status()
+        except (requests.exceptions.RequestException, ValueError) as e:
+            logging.warning("Stair signal '%s' failed: %s", command, e)
+
 def blink(hue):
     if hue.is_on():
         hue.off()
@@ -215,6 +239,8 @@ def shutdown(signum, frame):
     logging.info("Received signal %s, shutting down - turning lights off.", signal.Signals(signum).name)
     if hue is not None:
         hue.try_off(3)
+    if stair is not None:
+        stair.signal("clear")
     sys.exit(0)
 
 #==============================================================================#
@@ -238,6 +264,7 @@ if not which(SNMP_GET_CMD):
     sys.exit(1)
 
 hue = None
+stair = None
 
 # Register shutdown handlers before constructing the client: the v2 client's
 # constructor performs network I/O (group resolution) that can block.
@@ -245,13 +272,15 @@ signal.signal(signal.SIGTERM, shutdown)
 signal.signal(signal.SIGINT, shutdown)
 
 hue = HueClient(HUE_BRIDGE_HOST, API_KEY, HUE_GROUP, HUE_RETRY_DELAY, HUE_TIMEOUT)
+stair = StairClient(STAIR_HOST, STAIR_TIMEOUT)
 
 # Construct the snmpget command
 snmpget_cmd = [SNMP_GET_CMD, "-v", SNMP_VERSION, "-r", SNMP_RETRY_COUNT, "-c", SNMP_COMMUNITY, SNMP_TARGET_HOST, SNMP_OID]
 
-logging.info("Started: bridge=%s group=%s snmp_target=%s sim=%s",
+logging.info("Started: bridge=%s group=%s snmp_target=%s sim=%s stair=%s",
              HUE_BRIDGE_HOST, HUE_GROUP, SNMP_TARGET_HOST,
-             os.environ.get("ADSL_SIM_FILE") or "off")
+             os.environ.get("ADSL_SIM_FILE") or "off",
+             STAIR_HOST or "disabled")
 
 # Main loop
 while True:
@@ -265,6 +294,7 @@ while True:
         if showtime_start == 0:
             logging.info("Entering showtime status")
             hue.set_color("green")
+            stair.signal("green_fade")
             showtime_start = 1
         if green_count > 0:
             hue.set_brightness(green_count / 254 * 100)
@@ -280,6 +310,7 @@ while True:
         if training_start == 0:
             logging.info("Entering training status")
             hue.set_color("yellow")
+            stair.signal("yellow_blink")
             training_start = 1
             hue.set_brightness(100)
         blink(hue)
@@ -292,6 +323,7 @@ while True:
             logging.info("Entering ready status")
             ready_start = 1
             hue.set_color("red")
+            stair.signal("red_blink")
             hue.set_brightness(100)
             time.sleep(1)
         blink(hue)
@@ -304,5 +336,6 @@ while True:
             logging.info("Entering error status")
             hue.set_color("red")
             hue.on(100)
+            stair.signal("red")
             error_start = 1
         state = read_status(2)

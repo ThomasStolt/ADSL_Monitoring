@@ -16,7 +16,7 @@ This repo mirrors files that live in three different places on the Pi. There is 
 |---|---|---|
 | `Get_Vigor165_DSL_Status.py` | `/usr/local/bin/` | The daemon. |
 | `adsl_monitoring.service` | `/etc/systemd/system/` | The unit. `WorkingDirectory=/etc/adsl_monitoring`, `User=adsl_monitor`, `EnvironmentFile=` the conf below. |
-| `adsl_monitoring.conf` | `/etc/adsl_monitoring/` | Site config (`KEY=VALUE`), loaded by systemd as env vars. Not secret. Includes `HUE_SHOWTIME_DIM_INTERVAL` (default `5` s). |
+| `adsl_monitoring.conf` | `/etc/adsl_monitoring/` | Site config (`KEY=VALUE`), loaded by systemd as env vars. Not secret. Includes `HUE_SHOWTIME_DIM_INTERVAL` (default `5` s). Also STAIR_HOST/STAIR_TIMEOUT for the optional stair output. |
 | `Philips_Hue_API_Key.txt` | `/etc/adsl_monitoring/` | **Secret**, git-ignored. Path is set by `HUE_API_KEY_FILE` (absolute by default). |
 
 ## How it works
@@ -33,6 +33,11 @@ The script (`Get_Vigor165_DSL_Status.py`) is a single infinite loop with a `HueC
    - `STATE_DOWN` → solid red, blinking.
    - `STATE_ERROR` (snmpget failed / modem unreachable) → solid red, retries every 2 s until it responds.
 5. **All bridge I/O** is in `HueClient` (v2/CLIP, HTTPS, `hue-application-key` header, brightness as percentage 0–100, `verify=False` for the bridge's self-signed cert on a trusted home LAN).
+6. **Optional secondary output:** if `STAIR_HOST` is set, `StairClient` mirrors the
+   state onto an RGBW stair strip via `POST /api/ext` (commands `green_fade` /
+   `yellow_blink` / `red_blink` / `red`), one per state transition. Best-effort
+   (short timeout, errors swallowed, no retry) so it never affects the Hue path;
+   `clear` is sent on shutdown. Empty `STAIR_HOST` disables it.
 
 State transitions are detected by `*_start` sentinel flags so the timestamped log line and color are set only on the *first* iteration of each state's `while` loop.
 
