@@ -218,9 +218,12 @@ class StairClient:
     def signal(self, command):
         if self._url is None:
             return
+        # ValueError covers a malformed host/URL (requests 2.25.1 raises plain
+        # ValueError from prepare_url, which is not a RequestException).
         try:
-            requests.post(self._url, data={"state": command}, timeout=self._timeout)
-        except requests.exceptions.RequestException as e:
+            resp = requests.post(self._url, data={"state": command}, timeout=self._timeout)
+            resp.raise_for_status()
+        except (requests.exceptions.RequestException, ValueError) as e:
             logging.warning("Stair signal '%s' failed: %s", command, e)
 
 def blink(hue):
@@ -274,9 +277,10 @@ stair = StairClient(STAIR_HOST, STAIR_TIMEOUT)
 # Construct the snmpget command
 snmpget_cmd = [SNMP_GET_CMD, "-v", SNMP_VERSION, "-r", SNMP_RETRY_COUNT, "-c", SNMP_COMMUNITY, SNMP_TARGET_HOST, SNMP_OID]
 
-logging.info("Started: bridge=%s group=%s snmp_target=%s sim=%s",
+logging.info("Started: bridge=%s group=%s snmp_target=%s sim=%s stair=%s",
              HUE_BRIDGE_HOST, HUE_GROUP, SNMP_TARGET_HOST,
-             os.environ.get("ADSL_SIM_FILE") or "off")
+             os.environ.get("ADSL_SIM_FILE") or "off",
+             STAIR_HOST or "disabled")
 
 # Main loop
 while True:
