@@ -1,5 +1,7 @@
 # ADSL Monitoring
 
+TLDR: if my ADSL internet connection via my Draytek Vigor DSL modem goes down, this will turn a group of Hue lights red immediately. So, I know instantly, why I suddenly have no internet (instead of starting to troubleshoot).
+
 Turns a group of **Philips Hue** lights into a live status indicator for an
 ADSL/VDSL internet line. It polls a **Draytek Vigor 165** modem over SNMP and
 colours the lights to match the connection state — a glance at the lamp tells
