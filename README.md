@@ -83,6 +83,8 @@ value (or the whole file) is missing.
 | `SNMP_VERSION` | `1` | SNMP version |
 | `SNMP_OID` | `.1.3.6.1.2.1.10.94.1.1.3.1.6.4` | `adslAturCurrStatus` |
 | `HUE_SHOWTIME_DIM_INTERVAL` | `5` | Seconds between green dim-down steps (UP/SHOWTIME state) |
+| `STAIR_HOST` | (empty) | Stair-light controller host. Empty disables the parallel stair output. |
+| `STAIR_TIMEOUT` | `3` | Per-request timeout (s) for the stair `/api/ext` POST. |
 
 **The Hue API key** is the 40-character application key used by the Hue v2 (CLIP) API
 (the same key works as it did under v1 — no need to regenerate). To create a fresh key,
@@ -141,6 +143,23 @@ echo error    > /tmp/adsl_sim
 
 Setting `HUE_SHOWTIME_DIM_INTERVAL=0.1` speeds up the green fade so you can
 watch the full dim-down sequence in seconds rather than minutes.
+
+## Parallel stair-light output (optional)
+
+If `STAIR_HOST` is set, the same line status is mirrored onto an RGBW stair-light
+strip via its `POST /api/ext` API, in parallel with the Hue group. One command is
+sent per state change:
+
+| State | Stair command |
+| --- | --- |
+| UP / SHOWTIME | `green_fade` (green fades over ~30 s, then the stairs return to normal) |
+| TRAINING | `yellow_blink` |
+| DOWN / READY | `red_blink` (held until the line changes) |
+| ERROR | `red` (held until the line changes) |
+
+This output is best-effort and secondary: a missing or unreachable stair controller
+is logged and ignored, and never affects the Hue output. On shutdown the strip is
+sent `clear` to release the override. Leave `STAIR_HOST` empty to disable.
 
 ## Notes
 
