@@ -294,6 +294,7 @@ while True:
         if showtime_start == 0:
             logging.info("Entering showtime status")
             hue.set_color("green")
+            stair.signal("green_fade")
             showtime_start = 1
         if green_count > 0:
             hue.set_brightness(green_count / 254 * 100)
@@ -309,6 +310,7 @@ while True:
         if training_start == 0:
             logging.info("Entering training status")
             hue.set_color("yellow")
+            stair.signal("yellow_blink")
             training_start = 1
             hue.set_brightness(100)
         blink(hue)
@@ -321,6 +323,7 @@ while True:
             logging.info("Entering ready status")
             ready_start = 1
             hue.set_color("red")
+            stair.signal("red_blink")
             hue.set_brightness(100)
             time.sleep(1)
         blink(hue)
@@ -333,5 +336,6 @@ while True:
             logging.info("Entering error status")
             hue.set_color("red")
             hue.on(100)
+            stair.signal("red")
             error_start = 1
         state = read_status(2)
