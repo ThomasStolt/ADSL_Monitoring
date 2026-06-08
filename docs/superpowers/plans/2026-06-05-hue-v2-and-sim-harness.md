@@ -547,18 +547,18 @@ git commit -m "Document Hue v2 migration and simulation harness"
 
 ## Task 5: Deploy to the Raspberry Pi and verify live
 
-**Files:** none (deployment only). Pi: `pi@192.168.2.53`, passwordless SSH.
+**Files:** none (deployment only). Pi: `<PI_USER>@<PI_HOST>`, passwordless SSH.
 
 - [ ] **Step 1: Stage the updated files to the Pi**
 
 ```bash
-scp Get_Vigor165_DSL_Status.py adsl_monitoring.conf pi@192.168.2.53:/tmp/
+scp Get_Vigor165_DSL_Status.py adsl_monitoring.conf <PI_USER>@<PI_HOST>:/tmp/
 ```
 
 - [ ] **Step 2: Install them and restart the service**
 
 ```bash
-ssh pi@192.168.2.53 '
+ssh <PI_USER>@<PI_HOST> '
   sudo install -m 755 -o root -g root /tmp/Get_Vigor165_DSL_Status.py /usr/local/bin/Get_Vigor165_DSL_Status.py
   sudo install -m 644 -o root -g root /tmp/adsl_monitoring.conf /etc/adsl_monitoring/adsl_monitoring.conf
   rm -f /tmp/Get_Vigor165_DSL_Status.py /tmp/adsl_monitoring.conf
@@ -575,14 +575,14 @@ Expected: `active`; logs show the `Resolved /groups/17 -> grouped_light ...` lin
 
 ```bash
 shasum -a 256 Get_Vigor165_DSL_Status.py
-ssh pi@192.168.2.53 'sudo shasum -a 256 /usr/local/bin/Get_Vigor165_DSL_Status.py'
+ssh <PI_USER>@<PI_HOST> 'sudo shasum -a 256 /usr/local/bin/Get_Vigor165_DSL_Status.py'
 ```
 Expected: identical hashes.
 
 - [ ] **Step 4: Confirm clean shutdown still works**
 
 ```bash
-ssh pi@192.168.2.53 'sudo systemctl stop adsl_monitoring; journalctl -u adsl_monitoring -n 3 --no-pager -o cat; sudo systemctl start adsl_monitoring'
+ssh <PI_USER>@<PI_HOST> 'sudo systemctl stop adsl_monitoring; journalctl -u adsl_monitoring -n 3 --no-pager -o cat; sudo systemctl start adsl_monitoring'
 ```
 Expected: a `Received signal SIGTERM, shutting down - turning lights off.` line; service comes back `active`.
 

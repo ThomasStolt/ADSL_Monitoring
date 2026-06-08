@@ -308,7 +308,7 @@ Verifies against the real stair controller (`StairLight.local`, reachable from t
 - [ ] **Step 1: Sim-harness run driving BOTH outputs (user watches).** With the live Pi service stopped, run locally:
 ```bash
 cd "/Users/tstolt/Library/CloudStorage/OneDrive-Persönlich/Documents/Github/ADSL_Monitoring"
-ssh pi@192.168.2.53 'sudo systemctl stop adsl_monitoring'
+ssh <PI_USER>@<PI_HOST> 'sudo systemctl stop adsl_monitoring'
 export ADSL_SIM_FILE=/tmp/adsl_sim
 export HUE_SHOWTIME_DIM_INTERVAL=0.1
 export HUE_API_KEY_FILE="$PWD/Philips_Hue_API_Key.txt"
@@ -319,7 +319,7 @@ sleep 8; echo training > /tmp/adsl_sim
 sleep 8; echo down     > /tmp/adsl_sim
 sleep 8; echo error    > /tmp/adsl_sim
 sleep 6; kill $PID
-ssh pi@192.168.2.53 'sudo systemctl start adsl_monitoring'
+ssh <PI_USER>@<PI_HOST> 'sudo systemctl start adsl_monitoring'
 ```
 Expected on the STRIP: green fade (then back to normal) → yellow blink → red blink → solid red. On Hue: green fade → yellow blink → red blink → solid red. Logs show no unhandled errors (a `Stair signal ... failed` warning would indicate a connectivity problem to investigate).
 
@@ -327,8 +327,8 @@ Expected on the STRIP: green fade (then back to normal) → yellow blink → red
 
 - [ ] **Step 3: Deploy script + conf to the Pi.**
 ```bash
-scp Get_Vigor165_DSL_Status.py adsl_monitoring.conf pi@192.168.2.53:/tmp/
-ssh pi@192.168.2.53 '
+scp Get_Vigor165_DSL_Status.py adsl_monitoring.conf <PI_USER>@<PI_HOST>:/tmp/
+ssh <PI_USER>@<PI_HOST> '
   sudo install -m 755 -o root -g root /tmp/Get_Vigor165_DSL_Status.py /usr/local/bin/Get_Vigor165_DSL_Status.py
   sudo install -m 644 -o root -g root /tmp/adsl_monitoring.conf /etc/adsl_monitoring/adsl_monitoring.conf
   rm -f /tmp/Get_Vigor165_DSL_Status.py /tmp/adsl_monitoring.conf
@@ -344,7 +344,7 @@ Expected: `active`; logs show the resolved group UUID and `Entering showtime sta
 - [ ] **Step 4: Hash check.**
 ```bash
 shasum -a 256 Get_Vigor165_DSL_Status.py
-ssh pi@192.168.2.53 'sudo shasum -a 256 /usr/local/bin/Get_Vigor165_DSL_Status.py'
+ssh <PI_USER>@<PI_HOST> 'sudo shasum -a 256 /usr/local/bin/Get_Vigor165_DSL_Status.py'
 ```
 Expected: identical hashes.
 

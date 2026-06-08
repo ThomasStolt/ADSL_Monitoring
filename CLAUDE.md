@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A single Python daemon that visualizes the line status of a **Draytek Vigor 165** ADSL/VDSL modem on a group of **Philips Hue** lights. It polls the modem over SNMP and drives the lights to reflect the connection state — so the physical lamp acts as a live status indicator for the internet line.
 
-The code runs on a Raspberry Pi (`192.168.2.53`, user `pi`, passwordless SSH) as a **systemd service** named `adsl_monitoring`, under a dedicated unprivileged user `adsl_monitor`. This repo is the working copy of the three deployed files.
+The code runs on a Raspberry Pi (`<PI_HOST>`, user `<PI_USER>`, passwordless SSH) as a **systemd service** named `adsl_monitoring`, under a dedicated unprivileged user `adsl_monitor`. This repo is the working copy of the three deployed files.
+
+> Placeholders like `<PI_HOST>`, `<PI_USER>`, and `<MODEM_IP>` stand in for the real LAN address / login / modem IP — these are deliberately not committed to keep private network details out of the public repo. The actual values live only on the Pi and in the local (git-ignored) config.
 
 ## Layout & deployment mapping
 
@@ -26,7 +28,7 @@ The script (`Get_Vigor165_DSL_Status.py`) is a single infinite loop with a `HueC
 0. **Loads config** from environment variables (`HUE_BRIDGE_HOST`, `HUE_GROUP`, `SNMP_TARGET_HOST`, etc.), each with a built-in default matching the original hard-coded value — so it still runs with no env set. systemd supplies these via `EnvironmentFile=`; logging uses the `logging` module to stdout (journald captures it). `SIGTERM`/`SIGINT` are trapped (`shutdown()`) to turn the lights off best-effort and exit 0, so `systemctl stop` is clean rather than a kill mid-loop.
 1. **Reads the Hue API key** from `HUE_API_KEY_FILE` (absolute path by default), `.strip()`-ed. No longer CWD-dependent.
 2. **Resolves the v2 group UUID** at startup: `HueClient.__init__` matches `id_v1 == "/groups/17"` across `room`, `zone`, and `grouped_light` resources via the v2 API and stores the UUID. Blocks (with retry) until the bridge answers.
-3. **Polls the modem** by shelling out to `snmpget` (SNMP v1, community `public`) against `192.168.2.2`, OID `.1.3.6.1.2.1.10.94.1.1.3.1.6.4` (`adslAturCurrStatus`). The raw hex strings are matched inside `parse_snmp_status()` and mapped to normalized states returned by `read_status()`.
+3. **Polls the modem** by shelling out to `snmpget` (SNMP v1, community `public`) against `<MODEM_IP>`, OID `.1.3.6.1.2.1.10.94.1.1.3.1.6.4` (`adslAturCurrStatus`). The raw hex strings are matched inside `parse_snmp_status()` and mapped to normalized states returned by `read_status()`.
 4. **Main loop switches on normalized states** from `read_status()`:
    - `STATE_UP` → green, slowly dims to off over ~254 steps (calm = healthy). Step interval controlled by `HUE_SHOWTIME_DIM_INTERVAL`.
    - `STATE_TRAINING` → solid yellow, blinking (toggles each poll).
@@ -43,7 +45,7 @@ State transitions are detected by `*_start` sentinel flags so the timestamped lo
 
 ## Key conventions / gotchas
 
-- **Two hosts are referenced and they differ:** the modem is an IP (`192.168.2.2`, SNMP); the Hue bridge is a *hostname* (`HUE_BRIDGE_HOST = "PhilipsHueBridge"`, HTTPS). The bridge name resolves via **mDNS** (`PhilipsHueBridge.local`, served by `avahi-daemon`) — it is not in `/etc/hosts`.
+- **Two hosts are referenced and they differ:** the modem is an IP (`<MODEM_IP>`, SNMP); the Hue bridge is a *hostname* (`HUE_BRIDGE_HOST = "PhilipsHueBridge"`, HTTPS). The bridge name resolves via **mDNS** (`PhilipsHueBridge.local`, served by `avahi-daemon`) — it is not in `/etc/hosts`.
 - **Resilience (added after a boot-time crash):** both layers now tolerate transient failures. SNMP errors retry in `read_status()`; all Hue HTTPS calls go through `HueClient._request()`, which retries forever on any `requests` transport error (DNS/connection/timeout) instead of crashing. The unit also has `Restart=on-failure`/`RestartSec=10` and waits on `network-online.target avahi-daemon.service` so the bridge name resolves before the first request. The original crash (`[Errno -3] Temporary failure in name resolution` at boot, then dead for days) is addressed by these together.
 - Tuning lives in `adsl_monitoring.conf` (env vars), **except** the three status hex strings (`READY`/`TRAINING`/`SHOWTIME`), which are protocol constants and stay in the script. No argument parsing.
 - **`ADSL_SIM_FILE`** — if set, `read_status()` reads the line state from that file instead of calling `snmpget`. Write one of the keywords `up` / `training` / `down` / `error` into the file to drive the state; empty or unknown content holds the last valid state. Not in the service config — for manual/dev runs only. Stop the service first to avoid two clients fighting over the group.
@@ -57,7 +59,7 @@ sudo systemctl {status|restart|stop} adsl_monitoring
 journalctl -u adsl_monitoring -f          # live logs (the script prints timestamped state changes)
 
 # Reproduce a poll by hand (verify modem reachable / OID)
-snmpget -v 1 -r 0 -c public 192.168.2.2 .1.3.6.1.2.1.10.94.1.1.3.1.6.4
+snmpget -v 1 -r 0 -c public <MODEM_IP> .1.3.6.1.2.1.10.94.1.1.3.1.6.4
 
 # Run the script manually (uses built-in defaults unless you export the conf vars)
 set -a; . /etc/adsl_monitoring/adsl_monitoring.conf; set +a
